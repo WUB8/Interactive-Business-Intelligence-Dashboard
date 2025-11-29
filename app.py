@@ -1,11 +1,6 @@
 """
-Interactive Business Intelligence Dashboard - Week 1 Foundation
-Retail Domain Focus
-
-Features:
-- Data upload and preview
-- Data profiling (statistics, missing values, quality assessment)
-- Strategy Pattern implementation
+Interactive Business Intelligence Dashboard - Final
+Retail Analytics Platform
 """
 
 import gradio as gr
@@ -13,286 +8,231 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import sys
+import tempfile
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent / 'src'))
 
 from strategies.profiling_strategies import (
-    BasicStatisticsStrategy,
-    MissingValuesStrategy,
-    NumericSummaryStrategy,
-    CategoricalSummaryStrategy,
-    DataQualityStrategy
+    BasicStatisticsStrategy, MissingValuesStrategy, NumericSummaryStrategy,
+    CategoricalSummaryStrategy, DataQualityStrategy
+)
+from strategies.visualization_strategies import (
+    TimeSeriesStrategy, DistributionStrategy, CategoryStrategy, CorrelationStrategy
+)
+from strategies.insight_strategies import (
+    TopPerformersStrategy, AnomalyDetectionStrategy
 )
 
-# Global variable to store uploaded data
-current_data = None
+class AppState:
+    def __init__(self):
+        self.original_data = None
+        self.current_data = None
 
+state = AppState()
 
+# --- Data Processing ---
 def load_data(file):
-    """Load data from uploaded file"""
-    global current_data
-    
     if file is None:
-        return "Please upload a file", None, None, None, None, None
+        return "Please upload a file", None, None, None, None, None, gr.update(choices=[]), gr.update(choices=[])
     
     try:
-        # Determine file type and load accordingly
         if file.name.endswith('.csv'):
             df = pd.read_csv(file.name)
         elif file.name.endswith(('.xlsx', '.xls')):
             df = pd.read_excel(file.name)
         else:
-            return "Unsupported file format. Please upload CSV or Excel file.", None, None, None, None, None
+            return "Invalid file type.", None, None, None, None, None, gr.update(choices=[]), gr.update(choices=[])
         
-        current_data = df
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                try:
+                    df[col] = pd.to_datetime(df[col])
+                except:
+                    pass
+
+        state.original_data = df
+        state.current_data = df
         
-        # Generate all profiling information
         preview = df.head(20)
-        basic_stats = get_basic_statistics()
-        missing_vals = get_missing_values_analysis()
-        numeric_summary = get_numeric_summary()
-        quality_report = get_data_quality()
+        basic_stats = BasicStatisticsStrategy().process(df)
+        stats_text = f"""
+        **Rows:** {basic_stats['total_rows']:,} | **Cols:** {basic_stats['total_columns']}
+        **Memory:** {basic_stats['memory_usage']}
+        **Types:** {basic_stats['numeric_columns']} Numeric, {basic_stats['categorical_columns']} Categorical
+        """
         
-        success_msg = f"✅ Data loaded successfully! {len(df)} rows and {len(df.columns)} columns."
+        missing_df = MissingValuesStrategy().process(df)
+        if missing_df.empty: missing_df = pd.DataFrame({"Status": ["No missing values"]})
         
-        return success_msg, preview, basic_stats, missing_vals, numeric_summary, quality_report
+        numeric_df = NumericSummaryStrategy().process(df)
+        quality = DataQualityStrategy().process(df)
+        quality_text = f"**Completeness:** {quality['completeness']} | **Duplicates:** {quality['duplicate_rows']}"
+        
+        all_cols = df.columns.tolist()
+        
+        return (f"✅ Loaded {len(df)} rows", preview, stats_text, 
+                missing_df, numeric_df, quality_text, 
+                gr.update(choices=all_cols), gr.update(choices=all_cols))
         
     except Exception as e:
-        return f"❌ Error loading file: {str(e)}", None, None, None, None, None
+        return f"❌ Error: {str(e)}", None, None, None, None, None, gr.update(choices=[]), gr.update(choices=[])
 
-
-def get_basic_statistics():
-    """Get basic statistics using Strategy Pattern"""
-    global current_data
-    
-    if current_data is None:
-        return "No data loaded"
-    
-    strategy = BasicStatisticsStrategy()
-    stats = strategy.process(current_data)
-    
-    # Format as readable text
-    output = f"""
-📊 **Dataset Overview**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📝 Total Rows: {stats['total_rows']:,}
-📋 Total Columns: {stats['total_columns']}
-💾 Memory Usage: {stats['memory_usage']}
-
-**Column Types:**
-🔢 Numeric Columns: {stats['numeric_columns']}
-📝 Categorical Columns: {stats['categorical_columns']}
-📅 DateTime Columns: {stats['datetime_columns']}
-
-**Strategy Used:** {strategy.get_description()}
-    """
-    return output
-
-
-def get_missing_values_analysis():
-    """Analyze missing values using Strategy Pattern"""
-    global current_data
-    
-    if current_data is None:
-        return None
-    
-    strategy = MissingValuesStrategy()
-    missing_df = strategy.process(current_data)
-    
-    if missing_df.empty:
-        return pd.DataFrame({'Message': ['✅ No missing values found in the dataset!']})
-    
-    return missing_df
-
-
-def get_numeric_summary():
-    """Get numeric column summary using Strategy Pattern"""
-    global current_data
-    
-    if current_data is None:
-        return None
-    
-    strategy = NumericSummaryStrategy()
-    summary = strategy.process(current_data)
-    
-    if summary.empty:
-        return pd.DataFrame({'Message': ['No numeric columns found in the dataset']})
-    
-    return summary.round(2)
-
-
-def get_categorical_summary():
-    """Get categorical column summary using Strategy Pattern"""
-    global current_data
-    
-    if current_data is None:
-        return "No data loaded"
-    
+# FIX: Removed 'evt' argument to match the click call
+def generate_categorical_summary():
+    df = state.current_data
+    if df is None: return "No data"
     strategy = CategoricalSummaryStrategy()
-    summaries = strategy.process(current_data)
-    
-    if not summaries:
-        return "No categorical columns found in the dataset"
-    
-    output = "📊 **Categorical Columns Summary**\n\n"
-    for col, summary_df in summaries.items():
-        output += f"**{col}** (Unique values: {len(current_data[col].unique())})\n"
-        output += summary_df.to_markdown(index=False)
-        output += "\n\n"
-    
+    summaries = strategy.process(df)
+    output = ""
+    for col, data in summaries.items():
+        output += f"**{col}**\n{data.to_markdown()}\n\n"
     return output
 
+def apply_filters(column, operation, value):
+    df = state.original_data
+    if df is None: return "No data loaded", None
+    
+    try:
+        if not column or not value:
+            return "Please select a column and enter a value", df.head()
+            
+        if operation == "Equals (==)":
+            filtered = df[df[column].astype(str) == str(value)]
+        elif operation == "Greater Than (>)":
+            filtered = df[df[column] > float(value)]
+        elif operation == "Less Than (<)":
+            filtered = df[df[column] < float(value)]
+        elif operation == "Contains":
+            filtered = df[df[column].astype(str).str.contains(str(value), case=False, na=False)]
+        else:
+            filtered = df
+            
+        state.current_data = filtered
+        return f"✅ Filtered: {len(filtered)} rows", filtered.head(20)
+    except Exception as e:
+        return f"❌ Filter Error: {str(e)}", df.head()
 
-def get_data_quality():
-    """Get data quality report using Strategy Pattern"""
-    global current_data
-    
-    if current_data is None:
-        return "No data loaded"
-    
-    strategy = DataQualityStrategy()
-    quality = strategy.process(current_data)
-    
-    output = f"""
-🎯 **Data Quality Report**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✨ Completeness: {quality['completeness']}
-🔄 Duplicate Rows: {quality['duplicate_rows']} ({quality['duplicate_percentage']})
-"""
-    
-    if 'columns_with_zeros' in quality:
-        output += f"0️⃣ Columns with Zeros: {quality['columns_with_zeros']}\n"
-        output += f"➖ Columns with Negatives: {quality['columns_with_negatives']}\n"
-        output += f"📈 Columns with Outliers: {quality['columns_with_outliers']}\n"
-    
-    output += f"\n**Strategy Used:** {strategy.get_description()}"
-    
-    return output
+def reset_dataset():
+    if state.original_data is not None:
+        state.current_data = state.original_data
+        return "🔄 Reset to original", state.current_data.head(20)
+    return "No data", None
 
+# --- Visualization & Insights ---
+def update_viz_options(choice):
+    if choice == "Correlation":
+        return gr.update(visible=False), gr.update(visible=False)
+    elif choice == "Distribution":
+        return gr.update(visible=True, label="Numeric Column"), gr.update(visible=False)
+    return gr.update(visible=True), gr.update(visible=True)
 
-def get_column_info():
-    """Get detailed information about each column"""
-    global current_data
+def create_chart(chart_type, col1, col2):
+    df = state.current_data
+    if df is None: return None
     
-    if current_data is None:
-        return None
+    strategies = {
+        "Time Series": TimeSeriesStrategy(),
+        "Distribution": DistributionStrategy(),
+        "Bar Chart": CategoryStrategy(),
+        "Correlation": CorrelationStrategy()
+    }
     
-    info_data = []
-    for col in current_data.columns:
-        info_data.append({
-            'Column': col,
-            'Type': str(current_data[col].dtype),
-            'Non-Null Count': current_data[col].count(),
-            'Null Count': current_data[col].isnull().sum(),
-            'Unique Values': current_data[col].nunique(),
-            'Sample Values': str(current_data[col].dropna().head(3).tolist()[:3])
-        })
+    strategy = strategies.get(chart_type)
     
-    return pd.DataFrame(info_data)
+    try:
+        if chart_type == "Time Series":
+            return strategy.create_visualization(df, date_column=col1, value_column=col2)
+        elif chart_type == "Distribution":
+            return strategy.create_visualization(df, column=col1)
+        elif chart_type == "Bar Chart":
+            return strategy.create_visualization(df, category_column=col1, value_column=col2, aggregation='sum')
+        elif chart_type == "Correlation":
+            return strategy.create_visualization(df)
+    except Exception as e:
+        print(f"Viz Error: {e}")
+    return None
 
+def generate_insights():
+    df = state.current_data
+    if df is None: return "No data loaded"
+    perf = TopPerformersStrategy().process(df)
+    anom = AnomalyDetectionStrategy().process(df)
+    return f"{perf}\n\n---\n\n{anom}"
 
-# Create Gradio Interface
-with gr.Blocks(title="Retail BI Dashboard - Week 1", theme=gr.themes.Soft()) as app:
-    
-    gr.Markdown("""
-    # 🛍️ Interactive Business Intelligence Dashboard
-    ## Retail Analytics Platform - Week 1 Foundation
-    
-    **Domain:** E-commerce / Retail  
-    **Focus:** Data Upload, Preview, and Profiling
-    
-    Upload your retail dataset (CSV or Excel) to begin analysis.
-    """)
+def export_current_data():
+    df = state.current_data
+    if df is None: return None
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.csv')
+    df.to_csv(tmp.name, index=False)
+    return tmp.name
+
+# --- UI ---
+with gr.Blocks(title="Retail BI Dashboard") as app:
+    gr.Markdown("# 🛍️ Retail Business Intelligence Dashboard")
     
     with gr.Row():
         with gr.Column(scale=1):
-            file_input = gr.File(label="📁 Upload Dataset (CSV or Excel)", file_types=['.csv', '.xlsx', '.xls'])
-            load_button = gr.Button("🚀 Load and Analyze Data", variant="primary", size="lg")
-            status_output = gr.Textbox(label="Status", lines=2)
-            
-            gr.Markdown("""
-            ### 📊 Sample Dataset Available
-            A sample retail dataset is included in the `data/` folder:
-            - **online_retail.csv**: 5000 transactions across multiple categories
-            """)
+            file_upload = gr.File(label="📁 1. Upload Dataset", file_types=[".csv", ".xlsx"])
+            load_btn = gr.Button("🚀 Load Data", variant="primary")
+            status_msg = gr.Textbox(label="System Status", interactive=False)
     
     with gr.Tabs():
-        with gr.Tab("📋 Data Preview"):
-            preview_output = gr.Dataframe(label="First 20 Rows", wrap=True)
-        
-        with gr.Tab("📊 Basic Statistics"):
-            basic_stats_output = gr.Markdown()
-        
-        with gr.Tab("❓ Missing Values"):
-            missing_vals_output = gr.Dataframe(label="Missing Values Analysis")
-        
-        with gr.Tab("🔢 Numeric Summary"):
-            numeric_summary_output = gr.Dataframe(label="Numeric Columns Statistics")
-        
-        with gr.Tab("🏷️ Categorical Summary"):
-            categorical_summary_output = gr.Markdown()
-        
-        with gr.Tab("✅ Data Quality"):
-            quality_output = gr.Markdown()
-        
-        with gr.Tab("📝 Column Details"):
-            column_info_output = gr.Dataframe(label="Column Information")
-    
-    # Event handlers
-    load_button.click(
-        fn=load_data,
-        inputs=[file_input],
-        outputs=[
-            status_output,
-            preview_output,
-            basic_stats_output,
-            missing_vals_output,
-            numeric_summary_output,
-            quality_output
-        ]
-    )
-    
-    # Add categorical summary button
-    with gr.Row():
-        categorical_button = gr.Button("📊 Generate Categorical Summary")
-        column_info_button = gr.Button("📋 Show Column Details")
-    
-    categorical_button.click(
-        fn=get_categorical_summary,
-        outputs=categorical_summary_output
-    )
-    
-    column_info_button.click(
-        fn=get_column_info,
-        outputs=column_info_output
-    )
-    
-    gr.Markdown("""
-    ---
-    ### 🎯 Week 1 Completed Features:
-    - ✅ Project structure set up
-    - ✅ Retail domain selected with sample dataset
-    - ✅ Data upload and preview functionality
-    - ✅ Data profiling with multiple strategies:
-      - Basic Statistics Strategy
-      - Missing Values Analysis Strategy
-      - Numeric Summary Strategy
-      - Categorical Summary Strategy
-      - Data Quality Assessment Strategy
-    
-    ### 🏗️ Architecture:
-    This dashboard implements the **Strategy Pattern** for data processing:
-    - **Base Strategy**: Abstract interface defining the contract
-    - **Concrete Strategies**: Multiple implementations for different profiling approaches
-    - **Benefits**: Easy to extend, maintain, and test different profiling methods
-    
-    ### 📚 Next Steps (Week 2):
-    - Complete data profiling features
-    - Create filtering interface
-    - Begin visualization implementations
-    """)
+        with gr.Tab("📊 Data Profile"):
+            with gr.Row():
+                basic_stats = gr.Markdown("### Basic Statistics")
+                quality_stats = gr.Markdown("### Data Quality")
+            
+            with gr.Accordion("Detailed Categorical Analysis", open=False):
+                cat_btn = gr.Button("Generate Categorical Summary")
+                cat_output = gr.Markdown()
+                cat_btn.click(generate_categorical_summary, None, cat_output)
 
+            with gr.Row():
+                # FIX: Removed 'height' argument which caused TypeError
+                missing_tbl = gr.Dataframe(label="Missing Values Analysis")
+                numeric_tbl = gr.Dataframe(label="Numeric Summary")
+            preview_tbl = gr.Dataframe(label="Data Preview (First 20 Rows)")
+
+        with gr.Tab("🔍 Filter & Explore"):
+            with gr.Row():
+                filter_col = gr.Dropdown(label="Column")
+                filter_op = gr.Dropdown(label="Operation", choices=["Equals (==)", "Greater Than (>)", "Less Than (<)", "Contains"])
+                filter_val = gr.Textbox(label="Value")
+            with gr.Row():
+                apply_btn = gr.Button("Apply Filter")
+                reset_btn = gr.Button("Reset Data")
+            filtered_tbl = gr.Dataframe(label="Filtered Data Preview")
+            export_btn = gr.Button("💾 Export Filtered CSV")
+            download_file = gr.File(label="Download Export")
+
+        with gr.Tab("📈 Visualizations"):
+            with gr.Row():
+                viz_type = gr.Dropdown(label="Chart Type", choices=["Time Series", "Distribution", "Bar Chart", "Correlation"])
+                viz_col1 = gr.Dropdown(label="Primary Column (X-Axis/Category)")
+                viz_col2 = gr.Dropdown(label="Secondary Column (Y-Axis/Value)")
+            viz_gen_btn = gr.Button("Generate Chart", variant="primary")
+            chart_output = gr.Plot()
+
+        with gr.Tab("💡 Automated Insights"):
+            insight_btn = gr.Button("Generate Smart Insights")
+            insight_txt = gr.Markdown()
+
+    load_btn.click(
+        load_data, 
+        inputs=[file_upload], 
+        outputs=[status_msg, preview_tbl, basic_stats, missing_tbl, numeric_tbl, quality_stats, filter_col, viz_col1]
+    )
+    load_btn.click(lambda: gr.update(choices=[]), None, viz_col2) 
+    
+    apply_btn.click(apply_filters, [filter_col, filter_op, filter_val], [status_msg, filtered_tbl])
+    reset_btn.click(reset_dataset, None, [status_msg, filtered_tbl])
+    export_btn.click(export_current_data, None, download_file)
+    
+    viz_type.change(update_viz_options, viz_type, [viz_col1, viz_col2])
+    viz_gen_btn.click(create_chart, [viz_type, viz_col1, viz_col2], chart_output)
+    
+    insight_btn.click(generate_insights, None, insight_txt)
 
 if __name__ == "__main__":
-    app.launch(share=False, server_name="0.0.0.0", server_port=7860)
+    app.launch(server_name="0.0.0.0", server_port=7860)
