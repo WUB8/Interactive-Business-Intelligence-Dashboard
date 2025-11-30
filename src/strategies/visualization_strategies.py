@@ -1,11 +1,11 @@
 """
 Concrete Visualization Strategies
-Implements the Strategy Pattern for different visualization types using Plotly
 """
 import pandas as pd
 import plotly.express as px
 from typing import Any, List
 from .base_strategy import VisualizationStrategy
+import numpy as np
 
 class TimeSeriesStrategy(VisualizationStrategy):
     def create_visualization(self, data: pd.DataFrame, **kwargs) -> Any:
@@ -15,11 +15,10 @@ class TimeSeriesStrategy(VisualizationStrategy):
         if not date_col or not value_col:
             return None
             
-        # Ensure date sorting for correct line plotting
         daily_data = data.groupby(date_col)[value_col].sum().reset_index().sort_values(date_col)
         
         fig = px.line(daily_data, x=date_col, y=value_col, 
-                      title=f'{value_col} Over Time',
+                      title=f'Sum of {value_col} Over Time',
                       template='plotly_white')
         return fig
 
@@ -50,27 +49,33 @@ class CategoryStrategy(VisualizationStrategy):
     def create_visualization(self, data: pd.DataFrame, **kwargs) -> Any:
         cat_col = kwargs.get('category_column')
         val_col = kwargs.get('value_column')
-        agg_func = kwargs.get('aggregation', 'count')
+        agg_func = kwargs.get('aggregation', 'Count')
         
         if not cat_col:
             return None
             
-        # Case 1: Count or no value column provided
-        if agg_func == 'count' or not val_col:
+        # Normalize string to lowercase for logic
+        agg = agg_func.lower()
+        
+        # Case 1: Count (Doesn't need a value column)
+        if agg == 'count' or not val_col:
             counts = data[cat_col].value_counts().reset_index()
             counts.columns = [cat_col, 'Count']
-            return px.bar(counts, x=cat_col, y='Count', title=f'Count by {cat_col}',
+            return px.bar(counts, x=cat_col, y='Count', 
+                        title=f'Count by {cat_col}',
                         template='plotly_white')
         
-        # Case 2: Aggregation on value column
-        if agg_func == 'mean':
+        # Case 2: Aggregations that require a value column
+        if agg == 'mean':
             agg_data = data.groupby(cat_col)[val_col].mean().reset_index()
+        elif agg == 'median':
+            agg_data = data.groupby(cat_col)[val_col].median().reset_index()
         else: 
-            # Default to sum for 'sum' or any fallback
+            # Default to sum
             agg_data = data.groupby(cat_col)[val_col].sum().reset_index()
             
         return px.bar(agg_data, x=cat_col, y=val_col, 
-                    title=f'{agg_func.title()} of {val_col} by {cat_col}',
+                    title=f'{agg.title()} of {val_col} by {cat_col}',
                     template='plotly_white')
 
     def get_name(self) -> str:

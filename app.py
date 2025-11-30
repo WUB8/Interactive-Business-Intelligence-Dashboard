@@ -71,15 +71,15 @@ def load_data(file):
         
         all_cols = df.columns.tolist()
         
-        # Note: We return all_cols for Filter, but we will update Viz cols in the .then() event
         return (f"✅ Loaded {len(df)} rows", preview, stats_text, 
                 missing_df, numeric_df, quality_text, 
-                gr.update(choices=all_cols)) 
+                gr.update(choices=all_cols))
         
     except Exception as e:
         return f"❌ Error: {str(e)}", None, None, None, None, None, gr.update(choices=[])
 
-def generate_categorical_summary():
+# FIX: Added *args to accept any inputs (or none) to silence Gradio warnings
+def generate_categorical_summary(*args):
     df = state.current_data
     if df is None: return "No data"
     strategy = CategoricalSummaryStrategy()
@@ -121,36 +121,37 @@ def reset_dataset():
 
 # --- Visualization & Insights ---
 def update_viz_options(choice):
-    """Dynamically update column dropdowns based on the selected chart type"""
+    """Dynamically update column dropdowns and aggregation options"""
     df = state.current_data
     if df is None: 
-        return gr.update(choices=[]), gr.update(choices=[])
+        return gr.update(choices=[]), gr.update(choices=[]), gr.update(visible=False)
     
     all_cols = df.columns.tolist()
     num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
     date_cols = df.select_dtypes(include=['datetime']).columns.tolist()
     
-    # Logic to populate dropdowns with specific types
     if choice == "Time Series":
         return (gr.update(choices=date_cols, label="Date Column (X-Axis)", visible=True, value=None), 
-                gr.update(choices=num_cols, label="Value Column (Y-Axis)", visible=True, value=None))
+                gr.update(choices=num_cols, label="Value Column (Y-Axis)", visible=True, value=None),
+                gr.update(visible=False)) 
                 
     elif choice == "Distribution":
         return (gr.update(choices=num_cols, label="Numeric Column", visible=True, value=None), 
+                gr.update(visible=False),
                 gr.update(visible=False))
                 
     elif choice == "Bar Chart":
         return (gr.update(choices=cat_cols, label="Category Column", visible=True, value=None), 
-                gr.update(choices=num_cols, label="Value Column (Y-Axis)", visible=True, value=None))
+                gr.update(choices=num_cols, label="Value Column (Y-Axis)", visible=True, value=None),
+                gr.update(visible=True, value="Sum", label="Aggregation Method")) 
                 
     elif choice == "Correlation":
-        return (gr.update(visible=False), gr.update(visible=False))
+        return (gr.update(visible=False), gr.update(visible=False), gr.update(visible=False))
     
-    # Fallback
-    return gr.update(choices=all_cols, visible=True), gr.update(choices=all_cols, visible=True)
+    return gr.update(choices=all_cols, visible=True), gr.update(choices=all_cols, visible=True), gr.update(visible=False)
 
-def create_chart(chart_type, col1, col2):
+def create_chart(chart_type, col1, col2, agg_method):
     df = state.current_data
     if df is None: return None
     
@@ -169,7 +170,7 @@ def create_chart(chart_type, col1, col2):
         elif chart_type == "Distribution":
             return strategy.create_visualization(df, column=col1)
         elif chart_type == "Bar Chart":
-            return strategy.create_visualization(df, category_column=col1, value_column=col2, aggregation='sum')
+            return strategy.create_visualization(df, category_column=col1, value_column=col2, aggregation=agg_method)
         elif chart_type == "Correlation":
             return strategy.create_visualization(df)
     except Exception as e:
@@ -190,7 +191,7 @@ def export_current_data():
     df.to_csv(tmp.name, index=False)
     return tmp.name
 
-# --- UI ---
+# --- UI Construction ---
 with gr.Blocks(title="Retail BI Dashboard") as app:
     gr.Markdown("# 🛍️ Retail Business Intelligence Dashboard")
     
@@ -233,10 +234,15 @@ with gr.Blocks(title="Retail BI Dashboard") as app:
         # Tab 3: Visualizations
         with gr.Tab("📈 Visualizations"):
             with gr.Row():
-                # Set a default value to ensure logic triggers correctly
                 viz_type = gr.Dropdown(label="Chart Type", choices=["Time Series", "Distribution", "Bar Chart", "Correlation"], value="Time Series")
+                
+                # Column selections
                 viz_col1 = gr.Dropdown(label="Primary Column")
                 viz_col2 = gr.Dropdown(label="Secondary Column")
+                
+                # Aggregation Dropdown
+                viz_agg = gr.Dropdown(label="Aggregation Method", choices=["Sum", "Mean", "Median", "Count"], visible=False)
+            
             viz_gen_btn = gr.Button("Generate Chart", variant="primary")
             chart_output = gr.Plot()
 
@@ -247,28 +253,24 @@ with gr.Blocks(title="Retail BI Dashboard") as app:
 
     # --- Event Wiring ---
     
-    # 1. LOAD DATA: Update data state, profile tables, and filter dropdown
     load_btn.click(
         load_data, 
         inputs=[file_upload], 
         outputs=[status_msg, preview_tbl, basic_stats, missing_tbl, numeric_tbl, quality_stats, filter_col]
     ).then(
-        # 2. THEN: Explicitly update Visualization columns based on the default "Time Series" selection
         fn=update_viz_options,
         inputs=[viz_type],
-        outputs=[viz_col1, viz_col2]
+        outputs=[viz_col1, viz_col2, viz_agg]
     )
     
-    # Filter Events
     apply_btn.click(apply_filters, [filter_col, filter_op, filter_val], [status_msg, filtered_tbl])
     reset_btn.click(reset_dataset, None, [status_msg, filtered_tbl])
     export_btn.click(export_current_data, None, download_file)
     
-    # Viz Events
-    viz_type.change(update_viz_options, viz_type, [viz_col1, viz_col2])
-    viz_gen_btn.click(create_chart, [viz_type, viz_col1, viz_col2], chart_output)
+    viz_type.change(update_viz_options, viz_type, [viz_col1, viz_col2, viz_agg])
     
-    # Insight Events
+    viz_gen_btn.click(create_chart, [viz_type, viz_col1, viz_col2, viz_agg], chart_output)
+    
     insight_btn.click(generate_insights, None, insight_txt)
 
 if __name__ == "__main__":
