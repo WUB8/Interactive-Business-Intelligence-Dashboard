@@ -71,14 +71,14 @@ def load_data(file):
         
         all_cols = df.columns.tolist()
         
+        # Note: We return all_cols for Filter, but we will update Viz cols in the .then() event
         return (f"✅ Loaded {len(df)} rows", preview, stats_text, 
                 missing_df, numeric_df, quality_text, 
-                gr.update(choices=all_cols), gr.update(choices=all_cols))
+                gr.update(choices=all_cols)) 
         
     except Exception as e:
-        return f"❌ Error: {str(e)}", None, None, None, None, None, gr.update(choices=[]), gr.update(choices=[])
+        return f"❌ Error: {str(e)}", None, None, None, None, None, gr.update(choices=[])
 
-# FIX: Removed 'evt' argument to match the click call
 def generate_categorical_summary():
     df = state.current_data
     if df is None: return "No data"
@@ -121,11 +121,34 @@ def reset_dataset():
 
 # --- Visualization & Insights ---
 def update_viz_options(choice):
-    if choice == "Correlation":
-        return gr.update(visible=False), gr.update(visible=False)
+    """Dynamically update column dropdowns based on the selected chart type"""
+    df = state.current_data
+    if df is None: 
+        return gr.update(choices=[]), gr.update(choices=[])
+    
+    all_cols = df.columns.tolist()
+    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+    date_cols = df.select_dtypes(include=['datetime']).columns.tolist()
+    
+    # Logic to populate dropdowns with specific types
+    if choice == "Time Series":
+        return (gr.update(choices=date_cols, label="Date Column (X-Axis)", visible=True, value=None), 
+                gr.update(choices=num_cols, label="Value Column (Y-Axis)", visible=True, value=None))
+                
     elif choice == "Distribution":
-        return gr.update(visible=True, label="Numeric Column"), gr.update(visible=False)
-    return gr.update(visible=True), gr.update(visible=True)
+        return (gr.update(choices=num_cols, label="Numeric Column", visible=True, value=None), 
+                gr.update(visible=False))
+                
+    elif choice == "Bar Chart":
+        return (gr.update(choices=cat_cols, label="Category Column", visible=True, value=None), 
+                gr.update(choices=num_cols, label="Value Column (Y-Axis)", visible=True, value=None))
+                
+    elif choice == "Correlation":
+        return (gr.update(visible=False), gr.update(visible=False))
+    
+    # Fallback
+    return gr.update(choices=all_cols, visible=True), gr.update(choices=all_cols, visible=True)
 
 def create_chart(chart_type, col1, col2):
     df = state.current_data
@@ -178,6 +201,7 @@ with gr.Blocks(title="Retail BI Dashboard") as app:
             status_msg = gr.Textbox(label="System Status", interactive=False)
     
     with gr.Tabs():
+        # Tab 1: Profile
         with gr.Tab("📊 Data Profile"):
             with gr.Row():
                 basic_stats = gr.Markdown("### Basic Statistics")
@@ -189,11 +213,11 @@ with gr.Blocks(title="Retail BI Dashboard") as app:
                 cat_btn.click(generate_categorical_summary, None, cat_output)
 
             with gr.Row():
-                # FIX: Removed 'height' argument which caused TypeError
                 missing_tbl = gr.Dataframe(label="Missing Values Analysis")
                 numeric_tbl = gr.Dataframe(label="Numeric Summary")
             preview_tbl = gr.Dataframe(label="Data Preview (First 20 Rows)")
 
+        # Tab 2: Filter
         with gr.Tab("🔍 Filter & Explore"):
             with gr.Row():
                 filter_col = gr.Dropdown(label="Column")
@@ -206,32 +230,45 @@ with gr.Blocks(title="Retail BI Dashboard") as app:
             export_btn = gr.Button("💾 Export Filtered CSV")
             download_file = gr.File(label="Download Export")
 
+        # Tab 3: Visualizations
         with gr.Tab("📈 Visualizations"):
             with gr.Row():
-                viz_type = gr.Dropdown(label="Chart Type", choices=["Time Series", "Distribution", "Bar Chart", "Correlation"])
-                viz_col1 = gr.Dropdown(label="Primary Column (X-Axis/Category)")
-                viz_col2 = gr.Dropdown(label="Secondary Column (Y-Axis/Value)")
+                # Set a default value to ensure logic triggers correctly
+                viz_type = gr.Dropdown(label="Chart Type", choices=["Time Series", "Distribution", "Bar Chart", "Correlation"], value="Time Series")
+                viz_col1 = gr.Dropdown(label="Primary Column")
+                viz_col2 = gr.Dropdown(label="Secondary Column")
             viz_gen_btn = gr.Button("Generate Chart", variant="primary")
             chart_output = gr.Plot()
 
+        # Tab 4: Insights
         with gr.Tab("💡 Automated Insights"):
             insight_btn = gr.Button("Generate Smart Insights")
             insight_txt = gr.Markdown()
 
+    # --- Event Wiring ---
+    
+    # 1. LOAD DATA: Update data state, profile tables, and filter dropdown
     load_btn.click(
         load_data, 
         inputs=[file_upload], 
-        outputs=[status_msg, preview_tbl, basic_stats, missing_tbl, numeric_tbl, quality_stats, filter_col, viz_col1]
+        outputs=[status_msg, preview_tbl, basic_stats, missing_tbl, numeric_tbl, quality_stats, filter_col]
+    ).then(
+        # 2. THEN: Explicitly update Visualization columns based on the default "Time Series" selection
+        fn=update_viz_options,
+        inputs=[viz_type],
+        outputs=[viz_col1, viz_col2]
     )
-    load_btn.click(lambda: gr.update(choices=[]), None, viz_col2) 
     
+    # Filter Events
     apply_btn.click(apply_filters, [filter_col, filter_op, filter_val], [status_msg, filtered_tbl])
     reset_btn.click(reset_dataset, None, [status_msg, filtered_tbl])
     export_btn.click(export_current_data, None, download_file)
     
+    # Viz Events
     viz_type.change(update_viz_options, viz_type, [viz_col1, viz_col2])
     viz_gen_btn.click(create_chart, [viz_type, viz_col1, viz_col2], chart_output)
     
+    # Insight Events
     insight_btn.click(generate_insights, None, insight_txt)
 
 if __name__ == "__main__":
