@@ -50,7 +50,8 @@ class NumericSummaryStrategy(DataProcessingStrategy):
         summary['kurtosis'] = numeric_data.kurtosis()
         
         cols = ['count', 'mean', 'median', 'std', 'min', '25%', '50%', '75%', 'max', 'skewness', 'kurtosis']
-        return summary[[col for col in cols if col in summary.columns]]
+        # Add .reset_index() to convert the row labels into a visible column
+        return summary[[col for col in cols if col in summary.columns]].reset_index().rename(columns={'index': 'Column Name'})
     
     def get_description(self) -> str:
         return "Provides detailed statistical summary of numeric columns"
